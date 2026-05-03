@@ -1,0 +1,321 @@
+{
+  "id": "automated-shopify-inventory-slack-alert-bot",
+  "name": "Automated Shopify Inventory Slack Alert Bot",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "everyDay",
+        "time": "09:00",
+        "timezone": "Europe/Berlin"
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "id": "scheduleTrigger1",
+      "position": [
+        250,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "product",
+        "operation": "getAll",
+        "filters": {},
+        "options": {
+          "fields": "id,title,variants",
+          "published_status": "published"
+        }
+      },
+      "name": "Get Shopify Products",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "id": "getShopifyProducts1",
+      "credentials": {
+        "shopifyApi": {
+          "id": "YOUR_SHOPIFY_API_CREDENTIAL_ID",
+          "name": "Shopify API Account"
+        }
+      },
+      "position": [
+        450,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "values": [
+          {
+            "name": "lowStockThreshold",
+            "value": 5
+          }
+        ],
+        "options": {
+          "mergeData": true
+        }
+      },
+      "name": "Set Low Stock Threshold",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "id": "setLowStockThreshold1",
+      "position": [
+        650,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const lowStockThreshold = $json[0].lowStockThreshold;\nconst lowStockVariants = [];\n\nfor (const product of $json) {\n  if (product.variants && Array.isArray(product.variants)) {\n    for (const variant of product.variants) {\n      // Check if inventory_quantity is valid and below or equal to threshold\n      if (variant.inventory_quantity !== null && typeof variant.inventory_quantity === 'number' && variant.inventory_quantity <= lowStockThreshold) {\n        lowStockVariants.push({\n          productId: product.id,\n          productTitle: product.title,\n          variantId: variant.id,\n          variantTitle: variant.title || 'Default Variant',\n          quantity: variant.inventory_quantity,\n          threshold: lowStockThreshold\n        });\n      }\n    }\n  }\n}\n\nreturn lowStockVariants;"
+      },
+      "name": "Filter Low Stock Variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "id": "filterLowStockVariants1",
+      "position": [
+        850,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": [
+          {
+            "value1": "={{ $json.length }}",
+            "operator": "larger",
+            "value2": "0"
+          }
+        ]
+      },
+      "name": "If Low Stock Items Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "ifLowStockItemsFound1",
+      "position": [
+        1050,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combineAllItems",
+        "values": [
+          {
+            "name": "slackMessage",
+            "value": "Shopify Low Stock Alert!\n\nThe following items are running low:\n{{ $json.map(item => `- *${item.productTitle}* (${item.variantTitle}): ${item.quantity} available`).join('\\n') }}\n"
+          }
+        ]
+      },
+      "name": "Format Slack Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "id": "formatSlackMessage1",
+      "position": [
+        1250,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "slack-alerts",
+        "text": "={{ $json.slackMessage }}",
+        "options": {
+          "markdown": true
+        }
+      },
+      "name": "Send Slack Low Stock Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "id": "sendSlackLowStockAlert1",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_API_CREDENTIAL_ID",
+          "name": "Slack API Account"
+        }
+      },
+      "position": [
+        1450,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendRow",
+        "sheetName": "Inventory Logs",
+        "dataTableName": "A1",
+        "data": "={{ $json.map(item => ({ Date: new Date().toISOString(), Status: 'Low Stock Alert', Product: item.productTitle, Variant: item.variantTitle, Quantity: item.quantity, Threshold: item.threshold, Message: $json.slackMessage }) ) }}"
+      },
+      "name": "Google Sheets Log Low Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "id": "googleSheetsLogLowStock1",
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_API_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        1650,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendRow",
+        "sheetName": "Inventory Logs",
+        "dataTableName": "A1",
+        "data": "={{ { Date: new Date().toISOString(), Status: 'No Low Stock', Product: 'N/A', Variant: 'N/A', Quantity: 'N/A', Threshold: 'N/A', Message: 'No low stock items found at this time.' } }}"
+      },
+      "name": "Google Sheets Log No Low Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "id": "googleSheetsLogNoLowStock1",
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_API_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        1250,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "values": [
+          {
+            "name": "errorMessage",
+            "value": "Error in Shopify Inventory Bot: {{ $error.message }} at Node: {{ $error.node.name }}"
+          },
+          {
+            "name": "errorData",
+            "value": "={{ JSON.stringify($error, null, 2) }}"
+          }
+        ]
+      },
+      "name": "Set Error Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "id": "setErrorMessage1",
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "slack-errors",
+        "text": "={{ $json.errorMessage }}\n```json\n{{ $json.errorData }}\n```",
+        "options": {
+          "markdown": true
+        }
+      },
+      "name": "Send Slack Error Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "id": "sendSlackErrorNotification1",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_API_CREDENTIAL_ID",
+          "name": "Slack API Account"
+        }
+      },
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendRow",
+        "sheetName": "Error Logs",
+        "dataTableName": "A1",
+        "data": "={{ { Date: new Date().toISOString(), ErrorMessage: $json.errorMessage, ErrorDetails: $json.errorData } }}"
+      },
+      "name": "Google Sheets Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "id": "googleSheetsLogError1",
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_API_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        1050,
+        300
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "scheduleTrigger1",
+      "to": "getShopifyProducts1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "getShopifyProducts1",
+      "to": "setLowStockThreshold1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "setLowStockThreshold1",
+      "to": "filterLowStockVariants1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "filterLowStockVariants1",
+      "to": "ifLowStockItemsFound1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "ifLowStockItemsFound1",
+      "to": "formatSlackMessage1",
+      "fromHandle": "true",
+      "toHandle": "main"
+    },
+    {
+      "from": "ifLowStockItemsFound1",
+      "to": "googleSheetsLogNoLowStock1",
+      "fromHandle": "false",
+      "toHandle": "main"
+    },
+    {
+      "from": "formatSlackMessage1",
+      "to": "sendSlackLowStockAlert1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "sendSlackLowStockAlert1",
+      "to": "googleSheetsLogLowStock1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "getShopifyProducts1",
+      "to": "setErrorMessage1",
+      "fromHandle": "error",
+      "toHandle": "main"
+    },
+    {
+      "from": "setErrorMessage1",
+      "to": "sendSlackErrorNotification1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    },
+    {
+      "from": "sendSlackErrorNotification1",
+      "to": "googleSheetsLogError1",
+      "fromHandle": "main",
+      "toHandle": "main"
+    }
+  ]
+}
