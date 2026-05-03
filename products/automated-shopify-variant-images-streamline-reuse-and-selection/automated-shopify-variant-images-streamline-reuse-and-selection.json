@@ -1,0 +1,386 @@
+{
+  "nodes": [
+    {
+      "id": "Start Workflow",
+      "name": "Start Workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "Get Style Mappings",
+      "name": "Get Style Mappings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [
+        450,
+        200
+      ],
+      "parameters": {
+        "authentication": "googleSheets",
+        "operation": "getAll",
+        "spreadsheetId": "YOUR_GOOGLE_SHEET_ID_HERE",
+        "sheetName": "Shopify Variant Image Map",
+        "options": {}
+      }
+    },
+    {
+      "id": "Set Global Style Map",
+      "name": "Set Global Style Map",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        650,
+        200
+      ],
+      "parameters": {
+        "values": [
+          {
+            "name": "globalStyleMapping",
+            "value": "={{ $items.reduce((acc, item) => { acc[item.json['Style Name']] = item.json['Image Filenames'].split(',').map(f => f.trim()); return acc; }, {}) }}"
+          }
+        ],
+        "options": {
+          "overwrite": true
+        }
+      }
+    },
+    {
+      "id": "Get Shopify Products",
+      "name": "Get Shopify Products",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "authentication": "shopifyAdmin",
+        "resource": "product",
+        "operation": "getAll",
+        "options": {
+          "limit": 250,
+          "publishedStatus": "published"
+        }
+      }
+    },
+    {
+      "id": "Split Products",
+      "name": "Split Products",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "runParallel": false
+        }
+      }
+    },
+    {
+      "id": "Get Product Images",
+      "name": "Get Product Images",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        100
+      ],
+      "parameters": {
+        "authentication": "shopifyAdmin",
+        "resource": "productImage",
+        "operation": "getAll",
+        "productId": "={{ $json.id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "Code: Build Image Lookup",
+      "name": "Code: Build Image Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        100
+      ],
+      "parameters": {
+        "functionCode": "const productImageLookup = {};\nfor (const item of $input.all()) {\n  const image = item.json;\n  // Extract filename from URL (e.g., https://cdn.shopify.com/s/files/1/0000/0000/files/image_filename.jpg?v=...) \n  const url = new URL(image.src);\n  const pathnameParts = url.pathname.split('/');\n  const filenameWithExtension = pathnameParts[pathnameParts.length - 1];\n\n  if (filenameWithExtension) {\n    productImageLookup[filenameWithExtension] = image.id;\n  }\n}\nreturn [{ json: { productImageLookup } }];"
+      }
+    },
+    {
+      "id": "Code: Process Variants",
+      "name": "Code: Process Variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "functionCode": "const product = $input.item[0].json; // From Split Products\nconst productImageLookup = $input.item[1].json.productImageLookup; // From Code: Build Image Lookup\nconst globalStyleMapping = $input.item[2].json.globalStyleMapping; // From Set Global Style Map\n\nconst variantUpdates = [];\n\nfor (const variant of product.variants) {\n  let styleName = null;\n  // Example regex to extract style name from variant title, assuming pattern like \"Style Name - Age Variant\"\n  // Adjust this regex based on your actual variant title patterns.\n  // e.g., \"Round neck / Short sleeve / With pant - 6-12 months\" -> \"Round neck / Short sleeve / With pant\"\n  const styleNameRegex = /^(.*?)(?: - \\d{1,2}(?:\u2013\\d{1,2})? (?:months|years))?$/;\n  const match = variant.title.match(styleNameRegex);\n  if (match && match[1]) {\n    styleName = match[1].trim();\n  } else {\n    styleName = variant.title.trim(); // Fallback to full title if no age pattern matched\n  }\n\n  if (styleName && globalStyleMapping[styleName]) {\n    const styleFilenames = globalStyleMapping[styleName];\n    const associatedImageIds = [];\n    let primaryImageId = null;\n\n    for (const filename of styleFilenames) {\n      // Ensure we compare clean filenames without query parameters or paths\n      const cleanFilename = filename.split('?')[0].split('/').pop();\n      const imageId = productImageLookup[cleanFilename];\n      if (imageId) {\n        associatedImageIds.push(imageId);\n        if (!primaryImageId) {\n          primaryImageId = imageId; // Set the first found image as the primary variant image\n        }\n      }\n    }\n\n    if (associatedImageIds.length > 0) {\n      variantUpdates.push({\n        json: {\n          variantId: variant.id,\n          variant_update_payload: {\n            id: variant.id,\n            image_id: primaryImageId, // Link the variant to its primary style image\n            metafields: [\n              {\n                key: 'associated_image_ids',\n                namespace: 'custom',\n                value: JSON.stringify(associatedImageIds), // Store all associated image IDs as a JSON string\n                type: 'list.number_integer' // Critical for Shopify to interpret as a list of numbers\n              }\n            ]\n          }\n        }\n      });\n    } else {\n      console.warn(`[WARNING] No images found in Shopify for style \"${styleName}\" of product \"${product.title}\" (ID: ${product.id}) for variant \"${variant.title}\" (ID: ${variant.id}). No update applied.`);\n      // Log this to Google Sheets or Slack if needed for variants that don't find images\n    }\n  } else {\n    console.warn(`[WARNING] Style \"${styleName}\" (from variant title \"${variant.title}\") not found in global mapping for product \"${product.title}\" (ID: ${product.id}). No update applied.`);\n    // Log this to Google Sheets or Slack if needed for variants that don't match any style\n  }\n}\n\nreturn variantUpdates;\n"
+      }
+    },
+    {
+      "id": "Split Variant Updates",
+      "name": "Split Variant Updates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "runParallel": false
+        }
+      }
+    },
+    {
+      "id": "Shopify: Update Variant",
+      "name": "Shopify: Update Variant",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        300
+      ],
+      "parameters": {
+        "authentication": "shopifyAdmin",
+        "resource": "variant",
+        "operation": "update",
+        "id": "={{ $json.variantId }}",
+        "updateFields": "={{ $json.variant_update_payload }}"
+      }
+    },
+    {
+      "id": "Google Sheets: Log Update",
+      "name": "Google Sheets: Log Update",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [
+        2050,
+        300
+      ],
+      "parameters": {
+        "authentication": "googleSheets",
+        "operation": "append",
+        "spreadsheetId": "YOUR_GOOGLE_SHEET_ID_HERE",
+        "sheetName": "Workflow Log",
+        "options": {
+          "values": "={\n\"Timestamp\": \"{{ new Date().toISOString() }}\",\n\"Level\": \"INFO\",\n\"Message\": \"Variant updated successfully\",\n\"Product ID\": \"{{ $item(0).json.id }}\",\n\"Product Title\": \"{{ $item(0).json.title }}\",\n\"Variant ID\": \"{{ $json.variantId }}\",\n\"Variant Title\": \"{{ $json.variant_update_payload.title || 'N/A' }}\",\n\"Primary Image ID\": \"{{ $json.variant_update_payload.image_id }}\",\n\"Associated Image IDs Metafield\": \"{{ JSON.stringify($json.variant_update_payload.metafields[0].value) }}\"\n}",
+          "inputDataMap": {}
+        }
+      }
+    },
+    {
+      "id": "On Error Trigger",
+      "name": "On Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "Set Error Message",
+      "name": "Set Error Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        450,
+        500
+      ],
+      "parameters": {
+        "values": [
+          {
+            "name": "errorMessage",
+            "value": "={{ $json.error.message }}"
+          },
+          {
+            "name": "errorData",
+            "value": "={{ JSON.stringify($json.error, null, 2) }}"
+          }
+        ],
+        "options": {
+          "overwrite": true
+        }
+      }
+    },
+    {
+      "id": "Slack: Notify Error",
+      "name": "Slack: Notify Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        650,
+        450
+      ],
+      "parameters": {
+        "authentication": "slack",
+        "channel": "#n8n-alerts",
+        "text": "n8n Workflow Error: Automated Shopify Variant Images\n\nError Message: `{{ $json.errorMessage }}`\nFull Error: ```\n{{ $json.errorData }}\n```\nWorkflow: `{{ $workflow.name }}`\nExecution ID: `{{ $workflow.id }}`"
+      }
+    },
+    {
+      "id": "Google Sheets: Log Error",
+      "name": "Google Sheets: Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [
+        650,
+        550
+      ],
+      "parameters": {
+        "authentication": "googleSheets",
+        "operation": "append",
+        "spreadsheetId": "YOUR_GOOGLE_SHEET_ID_HERE",
+        "sheetName": "Error Log",
+        "options": {
+          "values": "={\n\"Timestamp\": \"{{ new Date().toISOString() }}\",\n\"Level\": \"ERROR\",\n\"Workflow Name\": \"{{ $workflow.name }}\",\n\"Execution ID\": \"{{ $workflow.id }}\",\n\"Error Message\": \"{{ $json.errorMessage }}\",\n\"Error Data\": \"{{ $json.errorData }}\"\n}",
+          "inputDataMap": {}
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start Workflow": {
+      "main": [
+        {
+          "node": "Get Style Mappings",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Get Style Mappings": {
+      "main": [
+        {
+          "node": "Set Global Style Map",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Set Global Style Map": {
+      "main": [
+        {
+          "node": "Get Shopify Products",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Code: Process Variants",
+          "type": "main",
+          "index": 2
+        }
+      ]
+    },
+    "Get Shopify Products": {
+      "main": [
+        {
+          "node": "Split Products",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Split Products": {
+      "main": [
+        {
+          "node": "Get Product Images",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Code: Process Variants",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Get Product Images": {
+      "main": [
+        {
+          "node": "Code: Build Image Lookup",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Code: Build Image Lookup": {
+      "main": [
+        {
+          "node": "Code: Process Variants",
+          "type": "main",
+          "index": 1
+        }
+      ]
+    },
+    "Code: Process Variants": {
+      "main": [
+        {
+          "node": "Split Variant Updates",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Split Variant Updates": {
+      "main": [
+        {
+          "node": "Shopify: Update Variant",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Shopify: Update Variant": {
+      "main": [
+        {
+          "node": "Google Sheets: Log Update",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "On Error Trigger": {
+      "main": [
+        {
+          "node": "Set Error Message",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Set Error Message": {
+      "main": [
+        {
+          "node": "Slack: Notify Error",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Google Sheets: Log Error",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    }
+  },
+  "name": "Orbitra Workflow",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
