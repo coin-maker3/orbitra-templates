@@ -1,0 +1,235 @@
+{
+  "name": "Automated Job Application Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "0 9 * * *"
+      },
+      "name": "ScheduleTrigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        300
+      ],
+      "id": "d4e9b5e3-0078-4321-9876-543210fedcba"
+    },
+    {
+      "parameters": {
+        "command": "axios.get('YOUR_JOB_BOARD_API_ENDPOINT')"
+      },
+      "name": "FetchJobListings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1.1,
+      "position": [
+        600,
+        300
+      ],
+      "id": "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+    },
+    {
+      "parameters": {
+        "options": {
+          "condition": "=\nconst job = $json.jobs;\n\n// Replace with your logic to check if a job has already been applied for\n// This could involve checking a database, a local file, or a Google Sheet\nconst hasApplied = job.some(j => j.applied === true);\n\nreturn hasApplied;",
+          "comparisonMethod": "boolean"
+        }
+      },
+      "name": "CheckIfAlreadyApplied",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        300
+      ],
+      "id": "b2c3d4e5-f6a7-8901-2345-67890abcdef1"
+    },
+    {
+      "parameters": {
+        "mode": "binary",
+        "content": "Error applying for job: {{ $json.error }}"
+      },
+      "name": "LogError",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        400
+      ],
+      "id": "c3d4e5f6-a7b8-9012-3456-7890abcdef12"
+    },
+    {
+      "parameters": {
+        "mode": "binary",
+        "content": "No new jobs found or all processed."
+      },
+      "name": "NoNewJobs",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        200
+      ],
+      "id": "d4e5f6a7-b8c9-0123-4567-890abcdef123"
+    },
+    {
+      "parameters": {
+        "command": "axios.post('YOUR_APPLICATION_API_ENDPOINT', {\n  jobId: $json.job.id,\n  applicantInfo: {\n    name: 'Your Name',\n    email: 'your.email@example.com',\n    resumeUrl: 'YOUR_RESUME_URL'\n  }\n})"
+      },
+      "name": "ApplyToJob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        300
+      ],
+      "id": "e5f6a7b8-c9d0-1234-5678-90abcdef1234"
+    },
+    {
+      "parameters": {
+        "values": {
+          "boolean": [
+            {
+              "name": "applied",
+              "value": true
+            }
+          ]
+        },
+        "mode": "set"
+      },
+      "name": "MarkAsApplied",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ],
+      "id": "f6a7b8c9-d0e1-2345-6789-0abcdef12345"
+    },
+    {
+      "parameters": {
+        "sheetName": "JobApplications",
+        "data": "=\n$json.jobs.map(job => ({\n  'Job Title': job.title,\n  'Company': job.company,\n  'Date Applied': new Date().toISOString(),\n  'Application Status': job.applied ? 'Applied' : 'Failed'\n}))",
+        "options": {
+          "action": "append"
+        }
+      },
+      "name": "GoogleSheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2.1,
+      "position": [
+        1400,
+        300
+      ],
+      "id": "0789abcd-ef01-2345-6789-0abcdef123456"
+    }
+  ],
+  "connections": {
+    "ScheduleTrigger": {
+      "main": [
+        [
+          {
+            "node": "FetchJobListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchJobListings": {
+      "main": [
+        [
+          {
+            "node": "CheckIfAlreadyApplied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckIfAlreadyApplied": {
+      "main": [
+        [
+          {
+            "node": "ApplyToJob",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NoNewJobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "true": [
+        [
+          {
+            "node": "NoNewJobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LogError": {
+      "main": [
+        [
+          {
+            "node": "GoogleSheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NoNewJobs": {
+      "main": [
+        [
+          {
+            "node": "GoogleSheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApplyToJob": {
+      "main": [
+        [
+          {
+            "node": "MarkAsApplied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MarkAsApplied": {
+      "main": [
+        [
+          {
+            "node": "GoogleSheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "triggerCount": 1,
+  "active": true,
+  "nodes_order": [
+    "d4e9b5e3-0078-4321-9876-543210fedcba",
+    "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+    "b2c3d4e5-f6a7-8901-2345-67890abcdef1",
+    "e5f6a7b8-c9d0-1234-5678-90abcdef1234",
+    "f6a7b8c9-d0e1-2345-6789-0abcdef12345",
+    "c3d4e5f6-a7b8-9012-3456-7890abcdef12",
+    "d4e5f6a7-b8c9-0123-4567-890abcdef123",
+    "0789abcd-ef01-2345-6789-0abcdef123456"
+  ],
+  "staticData": null
+}
