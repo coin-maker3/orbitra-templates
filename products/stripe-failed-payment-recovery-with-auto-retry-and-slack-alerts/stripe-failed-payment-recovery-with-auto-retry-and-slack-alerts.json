@@ -1,0 +1,743 @@
+{
+  "name": "Stripe Failed Payment Recovery",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "Get Failed Payments from Stripe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.stripe.com/v1/charges",
+        "authentication": "genericCredential",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "status",
+              "value": "failed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe-api-key",
+          "name": "Stripe API Key"
+        }
+      }
+    },
+    {
+      "id": "3",
+      "name": "Filter New Failed Payments",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.data.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "4",
+      "name": "Loop Over Failed Payments",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "5",
+      "name": "Check Retry Count",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.retry_count }}",
+              "operation": "isEmpty",
+              "value2": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6",
+      "name": "Initialize Retry Count",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        100
+      ],
+      "parameters": {
+        "values": {
+          "string": [],
+          "number": [
+            {
+              "name": "retry_count",
+              "value": 0
+            }
+          ]
+        },
+        "keepExisting": "deepMerge",
+        "options": {}
+      }
+    },
+    {
+      "id": "7",
+      "name": "Attempt Payment Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/charges",
+        "authentication": "genericCredential",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "amount",
+              "value": "={{ $json.amount }}"
+            },
+            {
+              "name": "currency",
+              "value": "={{ $json.currency }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.source }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.description }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "stripe-api-key",
+          "name": "Stripe API Key"
+        }
+      }
+    },
+    {
+      "id": "8",
+      "name": "Check Retry Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 200
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "9",
+      "name": "Success - Log to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        100
+      ],
+      "parameters": {
+        "operation": "append",
+        "sheetId": "your-sheet-id",
+        "range": "Sheet1!A:E",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": [
+            {
+              "key": "charge_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "key": "status",
+              "value": "recovered"
+            },
+            {
+              "key": "retry_count",
+              "value": "={{ $json.retry_count }}"
+            },
+            {
+              "key": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "id": "10",
+      "name": "Send Success Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        100
+      ],
+      "parameters": {
+        "channel": "C12345",
+        "text": "\u2705 Payment recovered for charge {{ $json.id }} (retry count: {{ $json.retry_count }})",
+        "jsonBody": {},
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slack-cred",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "id": "11",
+      "name": "Retry Failed - Check Max Retries",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.retry_count }}",
+              "operation": "largerEqual",
+              "value2": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "12",
+      "name": "Increment Retry Count",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        400
+      ],
+      "parameters": {
+        "values": {
+          "number": [
+            {
+              "name": "retry_count",
+              "value": "={{ $json.retry_count + 1 }}"
+            }
+          ]
+        },
+        "keepExisting": "deepMerge",
+        "options": {}
+      }
+    },
+    {
+      "id": "13",
+      "name": "Log Failed Attempt",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        400
+      ],
+      "parameters": {
+        "operation": "append",
+        "sheetId": "your-sheet-id",
+        "range": "Sheet1!A:E",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": [
+            {
+              "key": "charge_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "key": "status",
+              "value": "failed_attempt"
+            },
+            {
+              "key": "retry_count",
+              "value": "={{ $json.retry_count }}"
+            },
+            {
+              "key": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "id": "14",
+      "name": "Maybe Retry Later (Loop back)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Return the item to retry later (loop back)\nreturn items;"
+      }
+    },
+    {
+      "id": "15",
+      "name": "Max Retries Exceeded - Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        700
+      ],
+      "parameters": {
+        "operation": "append",
+        "sheetId": "your-sheet-id",
+        "range": "Sheet1!A:E",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": [
+            {
+              "key": "charge_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "key": "status",
+              "value": "max_retries_exceeded"
+            },
+            {
+              "key": "retry_count",
+              "value": "={{ $json.retry_count }}"
+            },
+            {
+              "key": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "id": "16",
+      "name": "Send Abandoned Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        700
+      ],
+      "parameters": {
+        "channel": "C12345",
+        "text": "\u274c Payment abandoned for charge {{ $json.id }} after {{ $json.retry_count }} retries",
+        "jsonBody": {},
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slack-cred",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "id": "17",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        600
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "18",
+      "name": "Log Error to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "position": [
+        450,
+        600
+      ],
+      "parameters": {
+        "operation": "append",
+        "sheetId": "your-sheet-id",
+        "range": "Sheet1!A:E",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": [
+            {
+              "key": "charge_id",
+              "value": "={{ $json.id || 'unknown' }}"
+            },
+            {
+              "key": "status",
+              "value": "error"
+            },
+            {
+              "key": "error_message",
+              "value": "={{ $json.error || $json.message }}"
+            },
+            {
+              "key": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "id": "19",
+      "name": "Send Error Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        650,
+        600
+      ],
+      "parameters": {
+        "channel": "C12345",
+        "text": "\ud83d\udea8 Error in Stripe payment recovery workflow: {{ $json.error || $json.message }}",
+        "jsonBody": {},
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slack-cred",
+          "name": "Slack Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Failed Payments from Stripe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Failed Payments from Stripe": {
+      "main": [
+        [
+          {
+            "node": "Filter New Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Failed Payments": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Failed Payments": {
+      "main": [
+        [
+          {
+            "node": "Check Retry Count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry Count": {
+      "main": [
+        [
+          {
+            "node": "Initialize Retry Count",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attempt Payment Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Retry Count": {
+      "main": [
+        [
+          {
+            "node": "Attempt Payment Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt Payment Retry": {
+      "main": [
+        [
+          {
+            "node": "Check Retry Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry Success": {
+      "main": [
+        [
+          {
+            "node": "Success - Log to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry Failed - Check Max Retries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success - Log to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Send Success Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Success Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Failed - Check Max Retries": {
+      "main": [
+        [
+          {
+            "node": "Increment Retry Count",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Max Retries Exceeded - Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Retry Count": {
+      "main": [
+        [
+          {
+            "node": "Log Failed Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Failed Attempt": {
+      "main": [
+        [
+          {
+            "node": "Maybe Retry Later (Loop back)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maybe Retry Later (Loop back)": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Max Retries Exceeded - Log": {
+      "main": [
+        [
+          {
+            "node": "Send Abandoned Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Abandoned Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Send Error Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
