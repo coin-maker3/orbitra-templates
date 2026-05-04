@@ -1,0 +1,239 @@
+{
+  "name": "Shopify Variant Image Reusability",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "ScheduleTrigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "id": "d2162939-f039-4d9e-a35b-1d24223180d3",
+      "position": {
+        "x": 200,
+        "y": 80
+      }
+    },
+    {
+      "parameters": {
+        "object": [
+          {
+            "fieldName": "Product ID",
+            "fieldValue": "={{ $json.get('id') }}"
+          },
+          {
+            "fieldName": "Product Title",
+            "fieldValue": "={{ $json.get('title') }}"
+          },
+          {
+            "fieldName": "Variant ID",
+            "fieldValue": "={{ $json.get('variants', [])[0].id }}"
+          },
+          {
+            "fieldName": "Variant Title",
+            "fieldValue": "={{ $json.get('variants', [])[0].title }}"
+          },
+          {
+            "fieldName": "Variant Image URL",
+            "fieldValue": "={{ $json.get('variants', [])[0].featured_image.src }}"
+          },
+          {
+            "fieldName": "Image ID",
+            "fieldValue": "={{ $json.get('variants', [])[0].featured_image.id }}"
+          }
+        ]
+      },
+      "name": "Set",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1.1,
+      "id": "85b10817-8103-494b-a876-b888f495b2c1",
+      "position": {
+        "x": 680,
+        "y": 80
+      }
+    },
+    {
+      "parameters": {
+        "query": "query GetProductsWithVariants {\n  products(first: 10) {\n    edges {\n      node {\n        id\n        title\n        variants(first: 10) {\n          edges {\n            node {\n              id\n              title\n              featuredImage {\n                id\n                url\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}",
+        "operation": "graphql"
+      },
+      "name": "Shopify",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1.1,
+      "id": "27945033-5a7d-4557-815d-5d113a89195f",
+      "position": {
+        "x": 440,
+        "y": 80
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "-}$": "Use variant images across sizes",
+          "IF": {
+            "$lt": [
+              "={{ $json.get('variants', []) | length }}",
+              8
+            ]
+          }
+        }
+      },
+      "name": "IF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1.1,
+      "id": "33056370-c630-40cf-a12a-013285687f32",
+      "position": {
+        "x": 880,
+        "y": 80
+      }
+    },
+    {
+      "parameters": {
+        "sheets": {
+          "sheetName": "Sheet1"
+        },
+        "rows": [
+          [
+            "={{ $json.get('Product ID') }}",
+            "={{ $json.get('Product Title') }}",
+            "={{ $json.get('Variant ID') }}",
+            "={{ $json.get('Variant Title') }}",
+            "={{ $json.get('Variant Image URL') }}",
+            "={{ $json.get('Image ID') }}"
+          ]
+        ],
+        "options": {
+          "toInsert": true
+        }
+      },
+      "name": "GoogleSheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2.1,
+      "id": "531a16e9-8d7b-4b6f-8a58-d2f2c9766d3a",
+      "position": {
+        "x": 200,
+        "y": 280
+      }
+    },
+    {
+      "parameters": {
+        "message": "Error processing product {{ $json.get('title') }}: {{ $error.message }}",
+        "channel": "C1234567890",
+        "options": {}
+      },
+      "name": "Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "id": "908f313f-4c3c-4d4d-8834-8732a9b556e7",
+      "position": {
+        "x": 880,
+        "y": 220
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "-}$": "Error Logging",
+          "IF": {
+            "$lt": [
+              "={{ $error }}",
+              null
+            ]
+          }
+        }
+      },
+      "name": "IF1",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1.1,
+      "id": "c390626e-992a-4e8c-9932-c12a4828331a",
+      "position": {
+        "x": 880,
+        "y": 160
+      }
+    }
+  ],
+  "connections": {
+    "ScheduleTrigger": {
+      "main": [
+        [
+          {
+            "node": "Shopify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set": {
+      "main": [
+        [
+          {
+            "node": "IF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shopify": {
+      "main": [
+        [
+          {
+            "node": "Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF": {
+      "main": [
+        [
+          {
+            "node": "GoogleSheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "alternative": [
+        [
+          {
+            "node": "IF1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GoogleSheets": {
+      "main": [
+        [
+          {
+            "node": "IF1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack": {
+      "main": []
+    },
+    "IF1": {
+      "main": [
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "triggerCount": 1,
+  "versionId": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+  "triggerVersion": 1,
+  "active": false,
+  "staticData": null
+}
