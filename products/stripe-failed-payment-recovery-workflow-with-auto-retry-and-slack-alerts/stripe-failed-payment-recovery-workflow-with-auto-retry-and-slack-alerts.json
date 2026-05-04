@@ -1,0 +1,302 @@
+{
+  "name": "Stripe Failed Payment Recovery Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "id": "2c29f000-0000-4000-8000-000000000001",
+      "position": {
+        "x": 200,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "query": "=SELECT * FROM payments WHERE status = 'failed'",
+        "stripeApi": {
+          "mode": "credentials",
+          "value": "stripe"
+        }
+      },
+      "name": "Get Failed Payments",
+      "type": "n8n-nodes-base.stripe",
+      "typeVersion": 1,
+      "id": "7d4f8b00-0000-4000-8000-000000000002",
+      "position": {
+        "x": 400,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "conditions": [
+          {
+            "condition": "={{ $json.numberOfAttempts < 3 }}"
+          }
+        ]
+      },
+      "name": "Check Retry Count",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "0a1b2c00-0000-4000-8000-000000000003",
+      "position": {
+        "x": 600,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "action": "update",
+        "object": "payment_intent",
+        "id": "={{ $json.currentNode.id }}",
+        "paymentIntent": {
+          "description": "Attempting retry {{ $json.numberOfAttempts + 1 }} for payment {{ $json.id }}"
+        },
+        "stripeApi": {
+          "mode": "credentials",
+          "value": "stripe"
+        }
+      },
+      "name": "Retry Payment",
+      "type": "n8n-nodes-base.stripe",
+      "typeVersion": 1,
+      "id": "9f8e7d00-0000-4000-8000-000000000004",
+      "position": {
+        "x": 800,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "0": {
+            "id": "={{ $json.id }}",
+            "status": "={{ $json.status }}",
+            "customerEmail": "={{ $json.customer_email }}",
+            "amount": "={{ $json.amount }}",
+            "currency": "={{ $json.currency }}",
+            "numberOfAttempts": "={{ $json.numberOfAttempts ? $json.numberOfAttempts + 1 : 1 }}",
+            "lastAttemptTimestamp": "={{ $now }}"
+          }
+        }
+      },
+      "name": "Update Attempt Count",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "id": "8a7b6c00-0000-4000-8000-000000000005",
+      "position": {
+        "x": 700,
+        "y": 300
+      }
+    },
+    {
+      "parameters": {
+        "text": "Subject: Stripe Payment Failed - {{ $json.id }}\n\nPayment ID: {{ $json.id }}\nCustomer Email: {{ $json.customer_email }}\nAmount: {{ $json.amount }} {{ $json.currency }}\nStatus: {{ $json.status }}\nNumber of Attempts: {{ $json.numberOfAttempts }}",
+        "slackCredentials": {
+          "mode": "credentials",
+          "value": "slack"
+        },
+        "channelName": "#alerts",
+        "username": "N8N Bot",
+        "iconEmoji": ":warning:"
+      },
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "id": "5b4a3d00-0000-4000-8000-000000000006",
+      "position": {
+        "x": 800,
+        "y": 100
+      }
+    },
+    {
+      "parameters": {
+        "mode": "credentials",
+        "value": "googleSheets"
+      },
+      "name": "Google Sheets Credentials",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "id": "3c2d1e00-0000-4000-8000-000000000007",
+      "position": {
+        "x": 1000,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "sheetName": "Stripe Failed Payments Log",
+        "sheetId": "12345abcdeFGHIJKLMNOPQRSTUVWXYZ012345",
+        "values": [
+          [
+            "={{ $json.id }}",
+            "={{ $json.status }}",
+            "={{ $json.customer_email }}",
+            "={{ $json.amount }}",
+            "={{ $json.currency }}",
+            "={{ $json.numberOfAttempts }}",
+            "={{ $now }}"
+          ]
+        ],
+        "options": {
+          "valueInputOption": "USER_ENTERED"
+        }
+      },
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "id": "1a2b3c00-0000-4000-8000-000000000008",
+      "position": {
+        "x": 1000,
+        "y": 200
+      }
+    },
+    {
+      "parameters": {
+        "text": "Subject: Stripe Payment Recovery Complete - {{ $json.id }}\n\nPayment ID: {{ $json.id }}\nCustomer Email: {{ $json.customer_email }}\nAmount: {{ $json.amount }} {{ $json.currency }}\nStatus: {{ $json.status }}\nNumber of Attempts: {{ $json.numberOfAttempts }}",
+        "slackCredentials": {
+          "mode": "credentials",
+          "value": "slack"
+        },
+        "channelName": "#alerts",
+        "username": "N8N Bot",
+        "iconEmoji": ":white_check_mark:"
+      },
+      "name": "Send Recovery Success Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "id": "e7d6c500-0000-4000-8000-000000000009",
+      "position": {
+        "x": 1000,
+        "y": 100
+      }
+    },
+    {
+      "parameters": {
+        "text": "Subject: Stripe Payment Recovery Failed - {{ $json.id }}\n\nPayment ID: {{ $json.id }}\nCustomer Email: {{ $json.customer_email }}\nAmount: {{ $json.amount }} {{ $json.currency }}\nStatus: {{ $json.status }}\nNumber of Attempts: {{ $json.numberOfAttempts }}",
+        "slackCredentials": {
+          "mode": "credentials",
+          "value": "slack"
+        },
+        "channelName": "#alerts",
+        "username": "N8N Bot",
+        "iconEmoji": ":x:"
+      },
+      "name": "Send Recovery Failure Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "id": "d6c5b400-0000-4000-8000-00000000000a",
+      "position": {
+        "x": 1000,
+        "y": 300
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Get Failed Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Failed Payments": {
+      "main": [
+        [
+          {
+            "node": "Check Retry Count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry Count": {
+      "main": [
+        [
+          {
+            "node": "Retry Payment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Recovery Success Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Payment": {
+      "main": [
+        [
+          {
+            "node": "Update Attempt Count",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Attempt Count": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Send Recovery Success Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Recovery Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
