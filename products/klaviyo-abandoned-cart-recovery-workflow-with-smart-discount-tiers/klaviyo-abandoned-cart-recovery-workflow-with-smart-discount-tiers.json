@@ -1,0 +1,379 @@
+{
+  "name": "Klaviyo Abandoned Cart Recovery with Smart Discounts",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "Get Abandoned Carts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://a.klaviyo.com/api/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filter",
+              "value": "equals(metric_id,\"ABANDONED_CART_METRIC_ID\")"
+            },
+            {
+              "name": "sort",
+              "value": "-datetime"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3",
+      "name": "Extract Cart Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const now = new Date();\nconst eventTime = new Date($input.item.json.attributes.datetime);\nconst hoursSinceCart = (now - eventTime) / (1000 * 60 * 60);\n\nconst cartValue = $input.item.json.attributes.event_properties?.value || 0;\nconst email = $input.item.json.attributes.profile?.email;\nconst cartItems = $input.item.json.attributes.event_properties?.items || [];\n\nreturn {\n  json: {\n    email: email,\n    cartValue: cartValue,\n    hoursSinceAbandonment: hoursSinceCart,\n    cartItems: cartItems,\n    eventId: $input.item.json.id,\n    profileId: $input.item.json.attributes.profile?.id,\n    cartUrl: $input.item.json.attributes.event_properties?.checkout_url\n  }\n};"
+      }
+    },
+    {
+      "id": "4",
+      "name": "Filter Valid Carts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        850,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            },
+            {
+              "id": "2",
+              "leftValue": "={{ $json.hoursSinceAbandonment }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "3",
+              "leftValue": "={{ $json.hoursSinceAbandonment }}",
+              "rightValue": 72,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5",
+      "name": "Calculate Discount Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const cartValue = $input.item.json.cartValue;\nconst hours = $input.item.json.hoursSinceAbandonment;\n\nlet discountPercent = 0;\nlet discountCode = '';\nlet urgencyLevel = '';\n\nif (hours >= 1 && hours < 24) {\n  if (cartValue < 50) {\n    discountPercent = 5;\n    discountCode = 'COMEBACK5';\n  } else if (cartValue < 100) {\n    discountPercent = 10;\n    discountCode = 'COMEBACK10';\n  } else {\n    discountPercent = 15;\n    discountCode = 'COMEBACK15';\n  }\n  urgencyLevel = 'low';\n} else if (hours >= 24 && hours < 48) {\n  if (cartValue < 50) {\n    discountPercent = 10;\n    discountCode = 'SAVEIT10';\n  } else if (cartValue < 100) {\n    discountPercent = 15;\n    discountCode = 'SAVEIT15';\n  } else {\n    discountPercent = 20;\n    discountCode = 'SAVEIT20';\n  }\n  urgencyLevel = 'medium';\n} else {\n  if (cartValue < 50) {\n    discountPercent = 15;\n    discountCode = 'LASTCHANCE15';\n  } else if (cartValue < 100) {\n    discountPercent = 20;\n    discountCode = 'LASTCHANCE20';\n  } else {\n    discountPercent = 25;\n    discountCode = 'LASTCHANCE25';\n  }\n  urgencyLevel = 'high';\n}\n\nreturn {\n  json: {\n    ...($input.item.json),\n    discountPercent: discountPercent,\n    discountCode: discountCode,\n    urgencyLevel: urgencyLevel,\n    emailTemplate: `abandoned_cart_${urgencyLevel}`\n  }\n};"
+      }
+    },
+    {
+      "id": "6",
+      "name": "Send Klaviyo Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://a.klaviyo.com/api/campaigns",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{ {\n  \"type\": \"campaign\",\n  \"attributes\": {\n    \"audiences\": {\n      \"included\": [$json.profileId]\n    },\n    \"template_id\": $json.emailTemplate,\n    \"send_strategy\": {\n      \"method\": \"immediate\"\n    },\n    \"tracking_options\": {\n      \"is_tracking_clicks\": true,\n      \"is_tracking_opens\": true\n    },\n    \"message\": {\n      \"content\": {\n        \"subject\": \"Don't forget your cart! Save \" + $json.discountPercent + \"% today\",\n        \"preview_text\": \"Complete your purchase with code \" + $json.discountCode\n      }\n    }\n  }\n} }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1ABC123XYZ",
+          "mode": "list",
+          "cachedResultName": "Abandoned Cart Recovery Log"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now }}",
+            "email": "={{ $json.email }}",
+            "cartValue": "={{ $json.cartValue }}",
+            "hoursSinceAbandonment": "={{ $json.hoursSinceAbandonment }}",
+            "discountPercent": "={{ $json.discountPercent }}",
+            "discountCode": "={{ $json.discountCode }}",
+            "urgencyLevel": "={{ $json.urgencyLevel }}",
+            "status": "success"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const error = $input.item.json.error || 'Unknown error';\nconst node = $input.item.json.node || 'Unknown node';\n\nreturn {\n  json: {\n    timestamp: new Date().toISOString(),\n    error: error,\n    node: node,\n    email: $input.item.json.email || 'N/A',\n    cartValue: $input.item.json.cartValue || 0,\n    status: 'error'\n  }\n};"
+      }
+    },
+    {
+      "id": "9",
+      "name": "Log Errors to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1450,
+        400
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1ABC123XYZ",
+          "mode": "list",
+          "cachedResultName": "Abandoned Cart Recovery Log"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Errors",
+          "mode": "list",
+          "cachedResultName": "Errors"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "email": "={{ $json.email }}",
+            "cartValue": "={{ $json.cartValue }}",
+            "error": "={{ $json.error }}",
+            "node": "={{ $json.node }}",
+            "status": "={{ $json.status }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "10",
+      "name": "No Valid Carts",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1050,
+        400
+      ],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "message",
+              "value": "No valid abandoned carts found",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "timestamp",
+              "value": "={{ $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Abandoned Carts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Abandoned Carts": {
+      "main": [
+        [
+          {
+            "node": "Extract Cart Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Cart Data": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid Carts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid Carts": {
+      "main": [
+        [
+          {
+            "node": "Calculate Discount Tier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Valid Carts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Discount Tier": {
+      "main": [
+        [
+          {
+            "node": "Send Klaviyo Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Klaviyo Email": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Log Errors to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
