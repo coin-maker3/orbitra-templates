@@ -1,0 +1,437 @@
+{
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Start Workflow",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "parameters": {
+        "mode": "everyDay",
+        "time": "09:00"
+      },
+      "position": [
+        200,
+        100
+      ]
+    },
+    {
+      "id": "2",
+      "name": "Shopify: Get Products",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "parameters": {
+        "resource": "products",
+        "operation": "getAll",
+        "fields": "id,title,variants",
+        "additionalFields": {
+          "publishedStatus": "published"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "shopifyApi": "YOUR_SHOPIFY_CREDENTIALS"
+      },
+      "position": [
+        450,
+        100
+      ]
+    },
+    {
+      "id": "3",
+      "name": "Code: Extract Low Stock Variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "parameters": {
+        "functionCode": "const lowStockThreshold = 5; // Define your low stock threshold here\nconst criticalStockThreshold = 2; // Define your critical stock threshold here\n\nconst lowStockVariants = [];\n\nfor (const item of $input.json) {\n  const product = item;\n  if (product.variants && Array.isArray(product.variants)) {\n    for (const variant of product.variants) {\n      // Check if inventory_quantity is valid and below threshold\n      if (variant.inventory_quantity !== null && variant.inventory_quantity !== undefined && variant.inventory_quantity <= lowStockThreshold) {\n        lowStockVariants.push({\n          product_id: product.id,\n          product_title: product.title,\n          variant_id: variant.id,\n          variant_title: variant.title || 'Default Variant',\n          variant_sku: variant.sku,\n          inventory_quantity: variant.inventory_quantity,\n          is_critical: variant.inventory_quantity <= criticalStockThreshold,\n          timestamp: new Date().toISOString()\n        });\n      }\n    }\n  }\n}\n\nreturn lowStockVariants;"
+      },
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "id": "4",
+      "name": "If: Any Low Stock Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "isGreaterThan",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "position": [
+        950,
+        100
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Google Sheets: Log All Low Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "append",
+        "spreadsheetId": "YOUR_SPREADSHEET_ID",
+        "sheetName": "Low Stock Log",
+        "options": {},
+        "values": {
+          "columns": [
+            {
+              "column": "Product Title",
+              "value": "={{ $json.product_title }}"
+            },
+            {
+              "column": "Variant Title",
+              "value": "={{ $json.variant_title }}"
+            },
+            {
+              "column": "Variant SKU",
+              "value": "={{ $json.variant_sku }}"
+            },
+            {
+              "column": "Inventory Quantity",
+              "value": "={{ $json.inventory_quantity }}"
+            },
+            {
+              "column": "Is Critical",
+              "value": "={{ $json.is_critical }}"
+            },
+            {
+              "column": "Timestamp",
+              "value": "={{ $json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "googleSheetsApi": "YOUR_GOOGLE_SHEETS_CREDENTIALS"
+      },
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Code: Filter Critical Low Stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "parameters": {
+        "functionCode": "const criticalItems = [];\n\nfor (const item of $input.json) {\n  if (item.is_critical) {\n    criticalItems.push(item);\n  }\n}\n\nreturn criticalItems;"
+      },
+      "position": [
+        1200,
+        200
+      ]
+    },
+    {
+      "id": "7",
+      "name": "Code: Prepare Daily Digest Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "parameters": {
+        "functionCode": "const items = $input.json;\nif (items.length === 0) {\n    // This branch should theoretically not be reached if 'If: Any Low Stock Found?' works correctly\n    // but as a safeguard, return a message.\n    return [{ json: { message: \"No low stock items found today. Good job!\" } }];\n}\n\nlet message = \"\ud83d\udce6 Daily Low Stock Digest \ud83d\udce6\\n\\n\";\nmessage += \"The following items are currently low in stock:\\n\\n\";\n\nfor (const item of items) {\n    const status = item.is_critical ? \"\ud83d\udea8 CRITICAL\" : \"\";\n    message += `- **${item.product_title}** (${item.variant_title}, SKU: \\`${item.variant_sku}\\`): **${item.inventory_quantity}** units left ${status}\\n`;\n}\n\nmessage += \"\\nCheck your Shopify inventory for details.\";\n\nreturn [{ json: { message: message } }];"
+      },
+      "position": [
+        1200,
+        400
+      ]
+    },
+    {
+      "id": "8",
+      "name": "If: Any Critical Stock Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "isGreaterThan",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "position": [
+        1450,
+        200
+      ]
+    },
+    {
+      "id": "9",
+      "name": "Set: Format Critical Alert Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "\ud83d\udea8 CRITICAL LOW STOCK: **{{ $json.product_title }}** - {{ $json.variant_title }} (SKU: `{{ $json.variant_sku }}`) has only **{{ $json.inventory_quantity }}** units left! Act fast!"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "position": [
+        1700,
+        150
+      ]
+    },
+    {
+      "id": "10",
+      "name": "Slack: Send Individual Critical Alerts",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "postMessage",
+        "options": {
+          "channel": "YOUR_CRITICAL_ALERTS_CHANNEL",
+          "message": "={{ $json.message }}"
+        }
+      },
+      "credentials": {
+        "slackApi": "YOUR_SLACK_CREDENTIALS"
+      },
+      "position": [
+        1950,
+        150
+      ]
+    },
+    {
+      "id": "11",
+      "name": "Slack: Send Daily Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "postMessage",
+        "options": {
+          "channel": "YOUR_DAILY_DIGEST_CHANNEL",
+          "message": "={{ $json.message }}"
+        }
+      },
+      "credentials": {
+        "slackApi": "YOUR_SLACK_CREDENTIALS"
+      },
+      "position": [
+        1450,
+        400
+      ]
+    },
+    {
+      "id": "12",
+      "name": "Workflow Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        200,
+        600
+      ]
+    },
+    {
+      "id": "13",
+      "name": "Set: Format Error Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "errorMessage",
+              "value": "\ud83d\udea8 n8n Workflow Error Detected! \ud83d\udea8\n\n**Workflow:** `{{ $json.workflow.name }}` (ID: `{{ $json.workflow.id }}`)\n**Node:** `{{ $json.error.context.item.json.node.name }}` (ID: `{{ $json.error.context.item.json.node.id }}`)\n**Error Type:** `{{ $json.error.name }}`\n**Message:** `{{ $json.error.message }}`\n**Timestamp:** `{{ new Date().toISOString() }}`"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "position": [
+        450,
+        600
+      ]
+    },
+    {
+      "id": "14",
+      "name": "Slack: Send Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "postMessage",
+        "options": {
+          "channel": "YOUR_ERROR_CHANNEL",
+          "message": "={{ $json.errorMessage }}"
+        }
+      },
+      "credentials": {
+        "slackApi": "YOUR_SLACK_CREDENTIALS"
+      },
+      "position": [
+        700,
+        550
+      ]
+    },
+    {
+      "id": "15",
+      "name": "Google Sheets: Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "append",
+        "spreadsheetId": "YOUR_SPREADSHEET_ID",
+        "sheetName": "Error Log",
+        "options": {},
+        "values": {
+          "columns": [
+            {
+              "column": "Timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            },
+            {
+              "column": "Workflow Name",
+              "value": "={{ $json.workflow.name }}"
+            },
+            {
+              "column": "Node Name",
+              "value": "={{ $json.error.context.item.json.node.name }}"
+            },
+            {
+              "column": "Error Type",
+              "value": "={{ $json.error.name }}"
+            },
+            {
+              "column": "Error Message",
+              "value": "={{ $json.error.message }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "googleSheetsApi": "YOUR_GOOGLE_SHEETS_CREDENTIALS"
+      },
+      "position": [
+        700,
+        650
+      ]
+    }
+  ],
+  "connections": {
+    "Start Workflow": {
+      "main": [
+        {
+          "node": "Shopify: Get Products",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Shopify: Get Products": {
+      "main": [
+        {
+          "node": "Code: Extract Low Stock Variants",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Code: Extract Low Stock Variants": {
+      "main": [
+        {
+          "node": "If: Any Low Stock Found?",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "If: Any Low Stock Found?": {
+      "main": [
+        {
+          "node": "Google Sheets: Log All Low Stock",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Code: Filter Critical Low Stock",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Code: Prepare Daily Digest Message",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Code: Filter Critical Low Stock": {
+      "main": [
+        {
+          "node": "If: Any Critical Stock Found?",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "If: Any Critical Stock Found?": {
+      "main": [
+        {
+          "node": "Set: Format Critical Alert Message",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Set: Format Critical Alert Message": {
+      "main": [
+        {
+          "node": "Slack: Send Individual Critical Alerts",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Code: Prepare Daily Digest Message": {
+      "main": [
+        {
+          "node": "Slack: Send Daily Digest",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Workflow Error Trigger": {
+      "main": [
+        {
+          "node": "Set: Format Error Message",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Set: Format Error Message": {
+      "main": [
+        {
+          "node": "Slack: Send Error Alert",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Google Sheets: Log Error",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    }
+  },
+  "name": "Orbitra Workflow",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
