@@ -1,0 +1,349 @@
+{
+  "id": "multipack_valuation_workflow",
+  "name": "Automated Multipack Valuation",
+  "startNodes": [
+    "Daily Valuation Trigger"
+  ],
+  "nodes": [
+    {
+      "id": "a2b3c4d5e6f7g8h9",
+      "name": "Daily Valuation Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "parameters": {
+        "interval": "hours",
+        "value": 24,
+        "mode": "everyX"
+      },
+      "position": [
+        250,
+        50
+      ]
+    },
+    {
+      "id": "b3c4d5e6f7g8h9i0",
+      "name": "Get Base Product Cost",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "get",
+        "resource": "product",
+        "id": "1234567890",
+        "fields": "variants{price, inventory_item{cost}}"
+      },
+      "credentials": {
+        "shopifyApi": {
+          "id": "shopifyCredential",
+          "name": "Shopify Account"
+        }
+      },
+      "position": [
+        250,
+        150
+      ]
+    },
+    {
+      "id": "c4d5e6f7g8h9i0j1",
+      "name": "Set Base Unit Cost",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "parameters": {
+        "options": {},
+        "values": [
+          {
+            "name": "baseUnitCost",
+            "value": "={{ $node[\"Get Base Product Cost\"].json.variants[0].inventory_item.cost || $node[\"Get Base Product Cost\"].json.variants[0].price }}"
+          }
+        ]
+      },
+      "position": [
+        250,
+        250
+      ]
+    },
+    {
+      "id": "d5e6f7g8h9i0j1k2",
+      "name": "Get All Multipacks",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "getAll",
+        "resource": "product",
+        "query": "tag:multipack",
+        "fields": "id, title, variants{id, sku, inventory_item_id, inventory_item{cost}}"
+      },
+      "credentials": {
+        "shopifyApi": {
+          "id": "shopifyCredential",
+          "name": "Shopify Account"
+        }
+      },
+      "position": [
+        500,
+        250
+      ]
+    },
+    {
+      "id": "e6f7g8h9i0j1k2l3",
+      "name": "Calculate Derived Costs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "parameters": {
+        "function": "/*\n  Input 0 (this item): One product from 'Get All Multipacks'\n  Input 1: Base Unit Cost from 'Set Base Unit Cost'\n*/\n\nconst baseUnitCost = $node.Get('input')[1].json.baseUnitCost;\nconst product = $json; // This item's product data\n\nlet packQuantity = 0;\n// Regex to find numbers followed by \"pack\" or \"x\" or just a digit at the start/end\n// Prioritize product title for pack quantity\nconst nameMatch = product.title.match(/(\\d+)\\s*-?pack/i) || product.title.match(/(\\d+)x/i) || product.title.match(/Pack of (\\d+)/i);\nconst skuMatch = product.variants[0].sku?.match(/(\\d+)\\s*-?pack/i) || product.variants[0].sku?.match(/(\\d+)x/i) || product.variants[0].sku?.match(/-(\\d+)$/);\n\nif (nameMatch && nameMatch[1]) {\n    packQuantity = parseInt(nameMatch[1], 10);\n} else if (skuMatch && skuMatch[1]) {\n    packQuantity = parseInt(skuMatch[1], 10);\n} else {\n    // If no explicit pack quantity found, return an empty array to skip this item.\n    // This ensures only clearly defined multipacks are processed.\n    return [];\n}\n\n// Only process true multipacks (packQuantity > 1)\nif (packQuantity > 1) {\n    const currentCost = parseFloat(product.variants[0].inventory_item.cost || 0);\n    const calculatedCost = parseFloat((baseUnitCost * packQuantity).toFixed(2)); // Round to 2 decimal places\n\n    return [{\n        json: {\n            product_id: product.id,\n            product_name: product.title,\n            variant_id: product.variants[0].id,\n            inventory_item_id: product.variants[0].inventory_item_id,\n            sku: product.variants[0].sku,\n            pack_quantity: packQuantity,\n            current_cost: currentCost,\n            calculated_cost: calculatedCost,\n            needs_update: (currentCost !== calculatedCost) // Flag if an update is needed\n        }\n    }];\n}\n\nreturn []; // If not a multipack or packQuantity <= 1, return empty to skip\n"
+      },
+      "position": [
+        500,
+        390
+      ]
+    },
+    {
+      "id": "f7g8h9i0j1k2l3m4",
+      "name": "Filter Items Needing Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "parameters": {
+        "conditions": [
+          {
+            "value": "={{ $item.json.needs_update }}",
+            "operator": "isTrue"
+          }
+        ]
+      },
+      "position": [
+        500,
+        530
+      ]
+    },
+    {
+      "id": "g8h9i0j1k2l3m4n5",
+      "name": "Update Shopify Inventory Cost",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "update",
+        "resource": "inventoryItem",
+        "inventoryItemId": "={{ $item.json.inventory_item_id }}",
+        "cost": "={{ $item.json.calculated_cost }}"
+      },
+      "credentials": {
+        "shopifyApi": {
+          "id": "shopifyCredential",
+          "name": "Shopify Account"
+        }
+      },
+      "position": [
+        750,
+        610
+      ]
+    },
+    {
+      "id": "h9i0j1k2l3m4n5o6",
+      "name": "Log Successful Updates",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_GOOGLE_SHEET_ID_SUCCESS_LOG",
+        "sheetName": "Successful Updates",
+        "dataMode": "rawData",
+        "data": "={{ [\n  ['Timestamp', 'Product ID', 'Product Name', 'SKU', 'Old Cost', 'New Cost', 'Pack Quantity'],\n  [new Date().toISOString(), $item.json.product_id, $item.json.product_name, $item.json.sku, $item.json.current_cost, $item.json.calculated_cost, $item.json.pack_quantity]\n] }}"
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "googleSheetsCredential",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        1000,
+        610
+      ]
+    },
+    {
+      "id": "i0j1k2l3m4n5o6p7",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        250,
+        800
+      ]
+    },
+    {
+      "id": "j1k2l3m4n5o6p7q8",
+      "name": "Prepare Error Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "parameters": {
+        "options": {},
+        "values": [
+          {
+            "name": "errorMessage",
+            "value": "={{ $error.context.errorMessage }}"
+          },
+          {
+            "name": "errorNode",
+            "value": "={{ $error.context.node.name }}"
+          },
+          {
+            "name": "timestamp",
+            "value": "={{ new Date().toISOString() }}"
+          },
+          {
+            "name": "executionId",
+            "value": "={{ $error.context.executionId }}"
+          }
+        ]
+      },
+      "position": [
+        500,
+        800
+      ]
+    },
+    {
+      "id": "k2l3m4n5o6p7q8r9",
+      "name": "Log Errors to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_GOOGLE_SHEET_ID_ERROR_LOG",
+        "sheetName": "Error Log",
+        "dataMode": "rawData",
+        "data": "={{ [\n  ['Timestamp', 'Execution ID', 'Node Name', 'Error Message'],\n  [$item.json.timestamp, $item.json.executionId, $item.json.errorNode, $item.json.errorMessage]\n] }}"
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "googleSheetsCredential",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        750,
+        800
+      ]
+    },
+    {
+      "id": "l3m4n5o6p7q8r9s0",
+      "name": "Log Skipped Items",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 1,
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_GOOGLE_SHEET_ID_SKIPPED_LOG",
+        "sheetName": "Skipped Items",
+        "dataMode": "rawData",
+        "data": "={{ [\n  ['Timestamp', 'Product ID', 'Product Name', 'SKU', 'Current Cost', 'Calculated Cost', 'Reason'],\n  [new Date().toISOString(), $item.json.product_id, $item.json.product_name, $item.json.sku, $item.json.current_cost, $item.json.calculated_cost, 'Cost already up-to-date']\n] }}"
+      },
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "googleSheetsCredential",
+          "name": "Google Sheets Account"
+        }
+      },
+      "position": [
+        750,
+        450
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Valuation Trigger": {
+      "main": [
+        {
+          "node": "Get Base Product Cost",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Get Base Product Cost": {
+      "main": [
+        {
+          "node": "Set Base Unit Cost",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Set Base Unit Cost": {
+      "main": [
+        {
+          "node": "Calculate Derived Costs",
+          "type": "main",
+          "index": 1
+        },
+        {
+          "node": "Get All Multipacks",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Get All Multipacks": {
+      "main": [
+        {
+          "node": "Calculate Derived Costs",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Calculate Derived Costs": {
+      "main": [
+        {
+          "node": "Filter Items Needing Update",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Filter Items Needing Update": {
+      "main": [
+        {
+          "node": "Update Shopify Inventory Cost",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Log Skipped Items",
+          "type": "main",
+          "index": 1
+        }
+      ]
+    },
+    "Update Shopify Inventory Cost": {
+      "main": [
+        {
+          "node": "Log Successful Updates",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        {
+          "node": "Prepare Error Message",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Prepare Error Message": {
+      "main": [
+        {
+          "node": "Log Errors to Google Sheets",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "staticData": null
+}
